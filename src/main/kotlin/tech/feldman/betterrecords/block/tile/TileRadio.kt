@@ -30,11 +30,12 @@ import net.minecraft.item.ItemStack
 import net.minecraft.nbt.NBTTagCompound
 import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
+import tech.feldman.betterrecords.api.ISoundSource
 import tech.feldman.betterrecords.helper.nbt.getSounds
 import tech.feldman.betterrecords.helper.nbt.hasSounds
 import tech.feldman.betterrecords.network.PacketRadioPlay
 
-class TileRadio : SimpleRecordWireHome(), IRecordWire {
+class TileRadio : SimpleRecordWireHome(), IRecordWire, ISoundSource {
 
     var crystal by CopyOnSetDelegate()
     override val record: ItemStack
@@ -72,6 +73,8 @@ class TileRadio : SimpleRecordWireHome(), IRecordWire {
     }
 
     fun rotation() = blockMetadata.toFloat()
+    override fun getRotationDegrees(): Float = rotation() * 90f
+
 
     override fun readFromNBT(compound: NBTTagCompound) = compound.run {
         super.readFromNBT(compound)

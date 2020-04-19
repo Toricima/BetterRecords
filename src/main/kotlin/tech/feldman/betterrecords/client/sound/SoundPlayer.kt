@@ -25,6 +25,7 @@ package tech.feldman.betterrecords.client.sound
 
 import net.minecraft.client.Minecraft
 import net.minecraft.client.audio.SoundManager
+import net.minecraft.tileentity.TileEntity
 import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.Vec3d
 import net.minecraftforge.client.event.sound.SoundLoadEvent
@@ -38,9 +39,11 @@ import org.lwjgl.openal.AL10
 import paulscode.sound.SoundSystem
 import tech.feldman.betterrecords.ID
 import tech.feldman.betterrecords.ModConfig
+import tech.feldman.betterrecords.api.ISoundSource
 import tech.feldman.betterrecords.api.record.IRecordAmplitude
 import tech.feldman.betterrecords.api.sound.Sound
 import tech.feldman.betterrecords.api.wire.IRecordWireHome
+import tech.feldman.betterrecords.block.tile.ModTile
 import tech.feldman.betterrecords.block.tile.TileRadio
 import tech.feldman.betterrecords.client.handler.ClientRenderHandler
 import tech.feldman.betterrecords.util.downloadFile
@@ -50,6 +53,7 @@ import java.io.File
 import java.io.InputStream
 import java.net.URL
 import java.nio.ByteBuffer
+import java.nio.IntBuffer
 import java.util.*
 import javax.sound.sampled.*
 import kotlin.collections.HashMap
@@ -90,7 +94,7 @@ object SoundPlayer {
         val url = URL(if (sound.url.startsWith("http")) sound.url else "http://${sound.url}")
         tech.feldman.betterrecords.BetterRecords.logger.info("Playing sound from stream at $pos in $dimension from $url")
 
-        val urlConn = tech.feldman.betterrecords.client.sound.IcyURLConnection(url).apply {
+        val urlConn = IcyURLConnection(url).apply {
             instanceFollowRedirects = true
         }
 
@@ -151,126 +155,84 @@ object SoundPlayer {
         }
     }
 
-    private var soundManager: net.minecraft.client.audio.SoundManager? = null
+    class Speaker(val pos: Vec3d, val te: ISoundSource) {
+        var source = 0
 
-    @SubscribeEvent
-    fun onSoundLoadEvent(event: SoundLoadEvent) {
-        println("Sound manager loaded.")
-        soundManager = event.manager
-    }
-
-    private fun rawPlay4(targetFormat: AudioFormat, din: AudioInputStream, pos: BlockPos, dimension: Int) {
-        val sndSystemField = ReflectionHelper.findField(SoundManager::class.java, "sndSystem", "field_148620_e")
-        val soundSystem = sndSystemField.get(soundManager!!) as SoundSystem
-
-        val streamName = "radio538"
+        // Don't queue too much data, otherwise it'll keep on playing after exiting the game/world
+        val queueMaxSize = 8
+        var knownBuffers: IntBuffer = BufferUtils.createIntBuffer(queueMaxSize)
+        val unusedBuffers = ArrayDeque<Int>(queueMaxSize) as Queue<Int>
 
 
-        soundSystem.rawDataStream(targetFormat, true, streamName, pos.x.toFloat(), pos.y.toFloat(), pos.z.toFloat(), 0, 16.0f)
-        soundSystem.play(streamName)
+        fun start() {
+            source = AL10.alGenSources()
+            checkALError("source gen")
+
+            // Sound needs to come from within the speaker, not on the the corner/floor
+            AL10.alSource3f(source,
+                    AL10.AL_POSITION,
+                    pos.x.toFloat(),
+                    pos.y.toFloat(),
+                    pos.z.toFloat()
+            )
+            checkALError("position")
 
 
-        val buffer = ByteArray(4096)
+            AL10.alSourcef(source, AL10.AL_PITCH, 1.0F)
+            checkALError("Changing Pitch")
 
-        var bytes = din.read(buffer)
-        while (bytes >= 0 && isSoundPlayingAt(pos, dimension)) {
+            AL10.alSourcei(source, AL10.AL_LOOPING, AL10.AL_FALSE)
+            checkALError("Changing looping")
 
-            soundSystem.feedRawAudioData(streamName, buffer)
+            // Set reference distance to _inside_ the block
+            AL10.alSourcef(source, AL10.AL_REFERENCE_DISTANCE, 0.05f)
+            checkALError("Changing ref distance")
 
-            updateLights(buffer, pos, dimension)
-            bytes = din.read(buffer)
-        }
+            AL10.alSourcef(source, AL10.AL_ROLLOFF_FACTOR, 0.4f)
+            checkALError("Changing rolloff factor")
 
-        soundSystem.stop(streamName)
-        stopPlayingAt(pos, dimension)
+            AL10.alSourcef(source, AL10.AL_MAX_DISTANCE, 50f)
+            checkALError("Changing max distance")
 
-        din.close()
-    }
+            val rotation = te.getRotationDegrees()
+            // Rotation of TileRadio is NESW, not degrees. 1.0 = north
+            val direction = Vec3d.fromPitchYaw(0f, rotation)
 
-    private fun rawPlay(targetFormat: AudioFormat, din: AudioInputStream, pos: BlockPos, dimension: Int) {
+            AL10.alSource3f(source, AL10.AL_DIRECTION, direction.x.toFloat(), direction.y.toFloat(), direction.z.toFloat())
+            checkALError("Changing direction")
 
-        //val line = getLine(targetFormat)
-
-        // https://github.com/kovertopz/Paulscode-SoundSystem/
-        // https://stackoverflow.com/a/5518320
-        // https://github.com/kcat/openal-soft/wiki/Programmer%27s-Guide#queuing-buffers-on-a-source
-        val source = AL10.alGenSources()
-
-
-        AL10.alSource3f(source, AL10.AL_POSITION, pos.x.toFloat(), pos.y.toFloat(), pos.z.toFloat())
-        //AL10.alSource3f(source, AL10.AL_POSITION, 0.0F, 0.0F,0.0F)
-        checkALError("position")
-
-        AL10.alSource3f(source, AL10.AL_VELOCITY, 0.0F, 0.0F,0.0F)
-        checkALError("velocity")
-
-        AL10.alSourcef(source, AL10.AL_GAIN,  1.0F)
-        checkALError("Changing gain")
-
-        AL10.alSourcef(source, AL10.AL_PITCH,  1.0F)
-        checkALError("Changing Pitch")
-
-        AL10.alSourcei(source, AL10.AL_LOOPING,  0)
-        checkALError("Changing Pitch")
+            // Half-cone angles, so 90 for 180 coverage
+            AL10.alSourcef(source, AL10.AL_CONE_OUTER_ANGLE, 90.0f)
+            checkALError("Changing outer cone angle")
+            AL10.alSourcef(source, AL10.AL_CONE_INNER_ANGLE, 60.0f)
+            checkALError("Changing inner cone angle")
 
 
-        if (Minecraft.getMinecraft().world?.provider?.dimension == dimension) {
-            val te = Minecraft.getMinecraft().world.getTileEntity(pos)
-            if (te is TileRadio) {
+            AL10.alSourcef(source, AL10.AL_CONE_OUTER_GAIN, 0.2f)
+            checkALError("Changing outer cone gain")
 
-                AL10.alSourcef(source, AL10.AL_MAX_DISTANCE, te.songRadiusMeters())
-                checkALError("Changing max distance")
 
-                val direction = Vec3d(1.0, 0.0, 0.0).rotateYaw(te.rotation()*360.0f)
+            // Prepare buffers
+            AL10.alGenBuffers(knownBuffers)
+            checkALError("Knownbuffer")
 
-                AL10.alSource3f(source, AL10.AL_DIRECTION, direction.x.toFloat(), direction.y.toFloat(), direction.z.toFloat())
-                AL10.alSourcef(source, AL10.AL_CONE_OUTER_ANGLE, 135.0f)
-                AL10.alSourcef(source, AL10.AL_CONE_INNER_ANGLE, 135.0f)
+            (0 until queueMaxSize).forEach { x ->
+                //println("Adding entry ${knownBuffers[x]}")
+                unusedBuffers.add(knownBuffers[x])
             }
         }
 
-        var started = false
-
-        val minGain = AL10.alGetSourcef(source, AL10.AL_MIN_GAIN)
-        val maxGain = AL10.alGetSourcef(source, AL10.AL_MAX_GAIN)
-
-        println("min gain: ${minGain} - max gain: ${maxGain}")
-
-        // Effects go on source
-        // https://github.com/LWJGL/lwjgl/blob/master/src/java/org/lwjgl/test/openal/EFX10Test.java#L308
-
-        // NOTE: We can play (for each speaker) a sound. However, we'd need to enqueue the data to multiple sources
-        // at multiple locations with multiple gains...
-
-        val queueMaxSize = 64
-        val knownBuffers =  BufferUtils.createIntBuffer(queueMaxSize)
-
-        AL10.alGenBuffers(knownBuffers)
-        checkALError("Knownbuffer")
-
-        val unusedBuffers = ArrayDeque<Int>(queueMaxSize) as Queue<Int>
-        (0 until queueMaxSize).forEach { x -> unusedBuffers.add(knownBuffers[x]) }
-
-        if (unusedBuffers.size == 0) {
-            throw Exception("Unused buffers 0?")
+        fun stop() {
+            AL10.alSourceStop(source)
+            AL10.alDeleteBuffers(knownBuffers)
+            AL10.alDeleteSources(source)
         }
 
-        println("Incoming data is ${targetFormat.frameSize} size, ${targetFormat.frameRate}, sampleRate ${targetFormat.sampleRate.toInt()}")
-        val buffer = ByteArray((targetFormat.sampleRate*targetFormat.frameSize*3).toInt())
+        fun handleProcessedBuffers() {
+            if (!AL10.alIsSource(source)) {
+                println("Source is not a source?")
+            }
 
-        val bufferFormat =
-            if (false) 0
-            else if (targetFormat.channels == 1 && targetFormat.sampleSizeInBits == 8) AL10.AL_FORMAT_MONO8
-            else if (targetFormat.channels == 1 && targetFormat.sampleSizeInBits == 16) AL10.AL_FORMAT_MONO16
-            else if (targetFormat.channels == 2 && targetFormat.sampleSizeInBits == 8) AL10.AL_FORMAT_STEREO8
-            else if (targetFormat.channels == 2 && targetFormat.sampleSizeInBits == 16) AL10.AL_FORMAT_STEREO16
-            else throw Exception("what")
-
-        //line.start()
-
-        var bytes = 0
-        while (isSoundPlayingAt(pos, dimension)) {
-            // Get all buffers that are played, and put them back on the queue
             val processed = AL10.alGetSourcei(source, AL10.AL_BUFFERS_PROCESSED)
             checkALError("Buffers processed")
             if (processed > 0) {
@@ -279,114 +241,158 @@ object SoundPlayer {
                 AL10.alSourceUnqueueBuffers(source, ib)
                 checkALError("Unqueue buffers")
                 (0 until processed).forEach { x ->
-                   // println("Writing back buffer ${ib[x]}")
+                    //println("Writing back buffer ${ib[x]}")
                     unusedBuffers.add(ib[x])
                 }
             }
+        }
+
+        fun setVolume(volume: Float) {
+            // AL_GAIN defines a scalar amplitude multiplier. As a source attribute, it applies to that
+            // particular source only. As a listener attribute, it effectively applies to all sources in the
+            // current context. The default 1.0 means that the sound is unattenuated. An AL_GAIN
+            // value of 0.5 is equivalent to an attenuation of 6 dB
+            AL10.alSourcef(source, AL10.AL_GAIN, 3 * volume)
+            checkALError("Changing gain")
+        }
+
+        fun hasFreeBuffers() = !unusedBuffers.isEmpty()
+
+        var started = false
+
+        // b should be the buffer with the channel already selected/filtered
+        fun streamData(b: ByteBuffer, sampleRate: Int, bufferFormat: Int) {
+            val usableBuffer = unusedBuffers.poll()
+
+            b.rewind()
+
+            //println("Writing chunk to buffer ${usableBuffer.toInt()}, ${AL10.alIsBuffer(usableBuffer.toInt())} $sampleRate $bufferFormat.")
+            AL10.alBufferData(
+                    usableBuffer.toInt(),
+                    bufferFormat,
+                    b,
+                    sampleRate
+            )
+            checkALError("Setting albufferdata")
+
+            AL10.alSourceQueueBuffers(source, usableBuffer.toInt())
+            checkALError("Queued")
+
+            if (!started) {
+                started = true
+
+                AL10.alSourcePlay(source)
+                checkALError("Source play")
+            }
+        }
+    }
+
+    class StereoSpeaker(val pos: Vec3d, val te: ISoundSource) {
+        val leftSpeaker = Speaker(pos.addVector(-0.01, 0.0, 0.0), te)
+        val rightSpeaker = Speaker(pos.addVector(0.01, 0.0, 0.0), te)
+
+        fun getChannelData(b: ByteArray, bLen: Int): Pair<ByteBuffer, ByteBuffer> {
+            val leftChannel = ByteBuffer.allocateDirect(bLen / 2)
+            val rightChannel = ByteBuffer.allocateDirect(bLen / 2)
+            (0 until bLen step 4).forEach {
+                leftChannel.put(b[it + 0])
+                leftChannel.put(b[it + 1])
+
+                rightChannel.put(b[it + 2])
+                rightChannel.put(b[it + 3])
+            }
+
+            // Mark len and reset
+            leftChannel.flip()
+            rightChannel.flip()
+
+            return Pair(leftChannel, rightChannel)
+        }
+
+        fun streamData(b: ByteArray, bLen: Int, sampleRate: Int, bufferFormat: Int) {
+            val (l, r) = getChannelData(b, bLen)
+            leftSpeaker.streamData(l, sampleRate, bufferFormat)
+            rightSpeaker.streamData(r, sampleRate, bufferFormat)
+        }
+
+        fun setVolume(volume: Float) {
+            leftSpeaker.setVolume(volume)
+            rightSpeaker.setVolume(volume)
+        }
+
+        fun stop() {
+            leftSpeaker.stop()
+            rightSpeaker.stop()
+        }
+
+        fun handleProcessedBuffers() {
+            leftSpeaker.handleProcessedBuffers()
+            rightSpeaker.handleProcessedBuffers()
+        }
+
+        fun start() {
+            leftSpeaker.start()
+            rightSpeaker.start()
+        }
+
+        fun hasFreeBuffers() = leftSpeaker.hasFreeBuffers() && rightSpeaker.hasFreeBuffers()
+    }
+
+    private fun rawPlay(targetFormat: AudioFormat, din: AudioInputStream, pos: BlockPos, dimension: Int) {
+        // pspeed42 from jMonkeyEngine:
+        // "For positional audio the sound has to be mono and you have to update the position if the listener..."
+        // So convert the incoming Stereo audio to 2x mono streams
+
+        // https://github.com/kovertopz/Paulscode-SoundSystem/
+        // https://stackoverflow.com/a/5518320
+        // https://github.com/kcat/openal-soft/wiki/Programmer%27s-Guide#queuing-buffers-on-a-source
+        // https://www.codota.com/code/java/methods/com.jme3.audio.openal.AL/alSourcef
+
+
+        if (Minecraft.getMinecraft().world?.provider?.dimension != dimension) return
+        val te = Minecraft.getMinecraft().world.getTileEntity(pos)!! as ISoundSource
+
+        val allSpeakers = mutableListOf<StereoSpeaker>()
+
+        val allSpeakerPositions = mutableSetOf<BlockPos>()
+        allSpeakerPositions.add(pos)
+
+        allSpeakerPositions.addAll(te.connections.map { BlockPos(it.x2, it.y2, it.z2) })
+
+        allSpeakerPositions.forEach {
+            val te = Minecraft.getMinecraft().world.getTileEntity(it)
+            if (te is ISoundSource) {
+                allSpeakers.add(StereoSpeaker(
+                        Vec3d(it.x.toDouble() + 0.5, it.y.toDouble() + 0.5, it.z.toDouble() + 0.5),
+                        te
+                ))
+            }
+        }
+
+        allSpeakers.forEach { it.start() }
+
+        val buffer = ByteArray((targetFormat.sampleRate * targetFormat.frameSize).toInt())
+
+        val bufferFormat = AL10.AL_FORMAT_MONO16
+
+        while (isSoundPlayingAt(pos, dimension)) {
+            allSpeakers.forEach { it.handleProcessedBuffers() }
 
             val currentVolume = getIngameVolume()
-            AL10.alSourcef(source, AL10.AL_GAIN, currentVolume)
-            checkALError("Changing gain")
 
-            while (!unusedBuffers.isEmpty()) {
-                bytes = din.read(buffer)
+            allSpeakers.forEach { it.setVolume(currentVolume) }
+
+            while (allSpeakers.all { it.hasFreeBuffers() }) {
+                val bytes = din.read(buffer)
                 if (bytes <= 0) break
-
-                //val currentGain = getGainForPlayerPosition(pos)
-                // println((currentGain/NoVolume))
-                //AL10.alSourcef(source, AL10.AL_GAIN, (1.0f-(currentGain/NoVolume)).coerceIn(0.0f, 1.0f)*currentVolume)
-
-
-
-                val usableBuffer = unusedBuffers.poll()
-
-                val buf = ByteBuffer.allocateDirect(bytes).put(buffer, 0, bytes)
-                buf.flip()
-                // Reset buffer for next read action
-                bytes = 0
-
-                // println("Writing chunk to buffer ${usableBuffer.toInt()}, ${AL10.alIsBuffer(usableBuffer.toInt())}.")
-                AL10.alBufferData(
-                        usableBuffer.toInt(),
-                        bufferFormat,
-                        buf,
-                        (targetFormat.sampleRate).toInt()
-                )
-                checkALError("Setting albufferdata")
-
-                AL10.alSourceQueueBuffers(source, usableBuffer.toInt())
-                checkALError("Queued")
+                allSpeakers.forEach { it.streamData(buffer, bytes, targetFormat.sampleRate.toInt(), bufferFormat) }
 
                 updateLights(buffer, pos, dimension)
-
-                if (!started) {
-                    started = true
-
-                    AL10.alSourcePlay(source)
-                    checkALError("Source play")
-                }
             }
         }
 
         stopPlayingAt(pos, dimension)
-
-//        line.drain()
-//        line.stop()
-//        line.close()
-        din.close()
-        AL10.alSourceStop(source)
-        AL10.alDeleteBuffers(knownBuffers)
-    }
-
-    private fun rawPlay2(targetFormat: AudioFormat, din: AudioInputStream, pos: BlockPos, dimension: Int) {
-        val line = getLine(targetFormat)
-        val defaultMixer = AudioSystem.getMixer(null)
-        val outputLine = defaultMixer.runCatching { getLine(Port.Info.LINE_OUT)}.getOrNull()
-
-        val gainControl = line.getControl(FloatControl.Type.MASTER_GAIN) as FloatControl
-        val volumeControl = outputLine?.getControl(FloatControl.Type.VOLUME) as FloatControl?
-
-
-        val reverbControl = line.runCatching { getControl(EnumControl.Type.REVERB) as EnumControl}
-        //reverbControl.value = ReverbType("Cave", 2250, -2.0f, 41300, -1.4f, 10300)
-
-        reverbControl.onSuccess { reverbCtrl ->
-            reverbCtrl.values.map { x -> x as ReverbType }.forEach {
-                println("Got ReverbType ${it.name}")
-                if (it.decayTime > 2000) {
-                    // Cavern?
-                    println("Trying to set cavern type")
-                    reverbCtrl.value = it
-                }
-            }
-        }
-
-        line.start()
-
-        val buffer = ByteArray(2048)
-        var bytes = din.read(buffer)
-
-        while (bytes >= 0 && isSoundPlayingAt(pos, dimension)) {
-            volumeControl?.value = getIngameVolume()
-            gainControl.value = getGainForPlayerPosition(pos).coerceIn(gainControl.minimum, gainControl.maximum)
-            line.write(buffer, 0, bytes)
-            updateLights(buffer, pos, dimension)
-            bytes = din.read(buffer)
-        }
-
-        stopPlayingAt(pos, dimension)
-
-        line.drain()
-        line.stop()
-        line.close()
-        din.close()
-    }
-
-    private fun getLine(audioFormat: AudioFormat): SourceDataLine {
-        val info = DataLine.Info(SourceDataLine::class.java, audioFormat)
-        val res = AudioSystem.getLine(info)
-        res.open()
-        return res as SourceDataLine
+        allSpeakers.forEach { it.stop() }
     }
 
     private fun updateLights(buffer: ByteArray, pos: BlockPos, dimension: Int) {
