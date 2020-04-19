@@ -32,4 +32,5 @@ interface IRecordWire {
     fun getName(): String
 
     val songRadiusIncrease: Float
+
 }

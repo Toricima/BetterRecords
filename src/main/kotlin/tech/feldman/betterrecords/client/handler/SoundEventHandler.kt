@@ -71,6 +71,6 @@ object SoundEventHandler {
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     fun onDimensionUnload(event: WorldEvent.Unload?) {
-        //SoundManager.stopAll()
+        SoundManager.stopAll()
     }
 }

@@ -46,4 +46,5 @@ abstract class ModTile : TileEntity() {
         writeToNBT(nbt)
         return SPacketUpdateTileEntity(pos, 1, nbt)
     }
+
 }

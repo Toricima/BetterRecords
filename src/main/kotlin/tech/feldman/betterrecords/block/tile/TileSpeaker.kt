@@ -29,10 +29,13 @@ import tech.feldman.betterrecords.block.BlockSpeaker
 import tech.feldman.betterrecords.extensions.set
 import tech.feldman.betterrecords.helper.ConnectionHelper
 import net.minecraft.nbt.NBTTagCompound
+import tech.feldman.betterrecords.api.ISoundSource
 
-class TileSpeaker : ModTile(), IRecordWire {
+class TileSpeaker : ModTile(), IRecordWire, ISoundSource {
 
     var rotation = 0f
+
+    override fun getRotationDegrees(): Float = rotation - 180f
 
     var size = BlockSpeaker.SpeakerSize.SMALL
         get() {
