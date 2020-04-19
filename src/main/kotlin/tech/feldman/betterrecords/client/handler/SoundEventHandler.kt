@@ -23,17 +23,21 @@
  */
 package tech.feldman.betterrecords.client.handler
 
+import net.minecraft.client.Minecraft
+import net.minecraftforge.event.world.WorldEvent
+import net.minecraftforge.fml.common.Mod
+import net.minecraftforge.fml.common.eventhandler.EventPriority
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+import net.minecraftforge.fml.relauncher.Side
+import sun.audio.AudioStream
 import tech.feldman.betterrecords.ID
 import tech.feldman.betterrecords.api.event.RadioInsertEvent
 import tech.feldman.betterrecords.api.event.RecordInsertEvent
 import tech.feldman.betterrecords.api.event.SoundStopEvent
 import tech.feldman.betterrecords.client.sound.SoundManager
 import tech.feldman.betterrecords.extensions.distanceTo
-import net.minecraft.client.Minecraft
-import net.minecraftforge.fml.common.Mod
-import net.minecraftforge.fml.common.eventhandler.EventPriority
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent
-import net.minecraftforge.fml.relauncher.Side
+import tech.feldman.betterrecords.network.PacketHandler
+import tech.feldman.betterrecords.network.PacketSoundStop
 
 @Mod.EventBusSubscriber(modid = ID, value = [Side.CLIENT])
 object SoundEventHandler {
@@ -62,7 +66,11 @@ object SoundEventHandler {
     @SubscribeEvent(priority = EventPriority.LOWEST)
     fun onSoundStopped(event: SoundStopEvent) {
         val (pos, dimension) = event
-
         SoundManager.stopQueueAt(pos, dimension)
+    }
+
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
+    fun onDimensionUnload(event: WorldEvent.Unload?) {
+        //SoundManager.stopAll()
     }
 }

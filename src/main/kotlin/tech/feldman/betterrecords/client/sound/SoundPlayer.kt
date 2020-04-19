@@ -59,8 +59,8 @@ import kotlin.math.absoluteValue
 object SoundPlayer {
 
     private val downloadFolder = File(Minecraft.getMinecraft().mcDataDir, "betterrecords/cache")
-
     private val playingSounds = HashMap<Pair<BlockPos, Int>, Sound>()
+
 
     fun playSound(pos: BlockPos, dimension: Int, sound: Sound) {
         tech.feldman.betterrecords.BetterRecords.logger.info("Playing sound at $pos in Dimension $dimension")
@@ -189,13 +189,12 @@ object SoundPlayer {
 
     private fun rawPlay(targetFormat: AudioFormat, din: AudioInputStream, pos: BlockPos, dimension: Int) {
 
-        //val line = getLine(targetFormat)
-
+        // https://github.com/wyozi/JaySound/blob/master/src/main/java/com/wyozi/jaysound/sound/Sound.java
         // https://github.com/kovertopz/Paulscode-SoundSystem/
         // https://stackoverflow.com/a/5518320
         // https://github.com/kcat/openal-soft/wiki/Programmer%27s-Guide#queuing-buffers-on-a-source
+        // http://openal.996291.n3.nabble.com/about-cone-td3023.html
         val source = AL10.alGenSources()
-
 
         AL10.alSource3f(source, AL10.AL_POSITION, pos.x.toFloat(), pos.y.toFloat(), pos.z.toFloat())
         //AL10.alSource3f(source, AL10.AL_POSITION, 0.0F, 0.0F,0.0F)
@@ -266,8 +265,6 @@ object SoundPlayer {
             else if (targetFormat.channels == 2 && targetFormat.sampleSizeInBits == 16) AL10.AL_FORMAT_STEREO16
             else throw Exception("what")
 
-        //line.start()
-
         var bytes = 0
         while (isSoundPlayingAt(pos, dimension)) {
             // Get all buffers that are played, and put them back on the queue
@@ -295,7 +292,6 @@ object SoundPlayer {
                 //val currentGain = getGainForPlayerPosition(pos)
                 // println((currentGain/NoVolume))
                 //AL10.alSourcef(source, AL10.AL_GAIN, (1.0f-(currentGain/NoVolume)).coerceIn(0.0f, 1.0f)*currentVolume)
-
 
 
                 val usableBuffer = unusedBuffers.poll()
@@ -330,9 +326,6 @@ object SoundPlayer {
 
         stopPlayingAt(pos, dimension)
 
-//        line.drain()
-//        line.stop()
-//        line.close()
         din.close()
         AL10.alSourceStop(source)
         AL10.alDeleteBuffers(knownBuffers)

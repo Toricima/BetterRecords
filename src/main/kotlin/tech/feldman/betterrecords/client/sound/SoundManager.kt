@@ -60,4 +60,12 @@ object SoundManager {
         jobs[Pair(pos, dimension)]?.stop()
         jobs.remove(Pair(pos, dimension))
     }
+
+    fun stopAll() {
+        jobs.forEach{x ->
+            val (pair, thread) = x
+            val (pos, dim) = pair
+            SoundPlayer.stopPlayingAt(pos,dim)
+        }
+    }
 }

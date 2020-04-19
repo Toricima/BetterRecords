@@ -30,9 +30,11 @@ import tech.feldman.betterrecords.api.event.SoundStopEvent
 import tech.feldman.betterrecords.client.sound.SoundManager
 import tech.feldman.betterrecords.extensions.distanceTo
 import net.minecraft.client.Minecraft
+import net.minecraftforge.common.MinecraftForge
 import net.minecraftforge.fml.common.Mod
 import net.minecraftforge.fml.common.eventhandler.EventPriority
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+import net.minecraftforge.fml.common.network.NetworkRegistry
 import net.minecraftforge.fml.relauncher.Side
 import tech.feldman.betterrecords.api.event.LaserHeightChangeEvent
 import tech.feldman.betterrecords.block.tile.TileLaser
@@ -44,6 +46,8 @@ object LaserEventHandler {
     fun onLaserHeightChangeEvent(event: LaserHeightChangeEvent) {
         val (pos, dimension, laserHeight) = event
         val world = Minecraft.getMinecraft().world
+
+
         (world.getTileEntity(pos) as? TileLaser)?.let { te ->
             te.length = laserHeight;
         }
